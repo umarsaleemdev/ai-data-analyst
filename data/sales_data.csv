@@ -1,0 +1,11 @@
+transaction_id,date,region,category,units_sold,unit_price,customer_rating
+TX1001,2026-01-01,North,Electronics,5,150.0,4.8
+TX1002,2026-01-01,South,Furniture,2,300.0,4.2
+TX1003,2026-01-02,East,Electronics,,120.0,3.9
+TX1004,2026-01-02,West,Clothing,15,25.0,4.9
+TX1005,2026-01-03,North,Furniture,1,850.0,4.1
+TX1006,2026-01-03,South,Electronics,8,200.0,
+TX1007,2026-01-04,West,Clothing,120,20.0,4.5
+TX1008,2026-01-04,East,Furniture,3,400.0,3.5
+TX1009,2026-01-05,North,Electronics,4,150.0,4.7
+TX1010,2026-01-05,South,Clothing,10,30.0,4.0
