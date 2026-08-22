@@ -1,98 +1,122 @@
+"""
+src/ingest.py
+Handles data loading (CSV & Excel), statistical aggregation, and IQR outlier detection.
+"""
+
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 import pandas as pd
 
 
 class DataIngestor:
-    """Loads, cleans, and extracts summary statistics from tabular datasets."""
+    """Handles multi-format data ingestion and statistical summarization."""
 
     def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
-        self.df: pd.DataFrame = pd.DataFrame()
 
-    def load_and_clean(self) -> pd.DataFrame:
-        """Reads CSV data, handles missing values, and derives essential columns."""
+    def load_data(self) -> pd.DataFrame:
+        """Loads CSV or Excel datasets cleanly into a Pandas DataFrame."""
         if not self.file_path.exists():
             raise FileNotFoundError(f"File not found at: {self.file_path}")
 
-        # 1. Load raw data
-        self.df = pd.read_csv(self.file_path)
+        extension = self.file_path.suffix.lower()
 
-        # 2. Fill missing numerical values with median strategies
-        for col in self.df.select_dtypes(include=["number"]).columns:
-            if self.df[col].isnull().any():
-                median_val = self.df[col].median()
-                self.df[col] = self.df[col].fillna(median_val)
+        if extension == ".csv":
+            return pd.read_csv(self.file_path)
+        elif extension in [".xlsx", ".xls"]:
+            return pd.read_excel(self.file_path, engine="openpyxl")
+        else:
+            raise ValueError(
+                f"Unsupported file format '{extension}'. Only .csv and .xlsx files are supported."
+            )
 
-        # 3. Calculate derived business metrics if applicable
-        if "units_sold" in self.df.columns and "unit_price" in self.df.columns:
-            self.df["total_revenue"] = self.df["units_sold"] * self.df["unit_price"]
-
-        return self.df
-
-    def detect_outliers(self) -> dict[str, list[dict[str, Any]]]:
-        """Uses the Interquartile Range (IQR) method to detect numeric anomalies."""
-        if self.df.empty:
-            self.load_and_clean()
-
-        outliers: dict[str, list[dict[str, Any]]] = {}
-        numeric_cols = self.df.select_dtypes(include=["number"]).columns
+    def calculate_iqr_outliers(
+        self, df: pd.DataFrame, numeric_cols: list[str]
+    ) -> dict[str, Any]:
+        """Identifies numerical outliers using the 1.5 * IQR rule."""
+        outlier_summary: dict[str, Any] = {}
 
         for col in numeric_cols:
-            q1 = self.df[col].quantile(0.25)
-            q3 = self.df[col].quantile(0.75)
+            clean_col = df[col].dropna()
+            if clean_col.empty:
+                continue
+
+            q1 = float(cast(float, clean_col.quantile(0.25)))
+            q3 = float(cast(float, clean_col.quantile(0.75)))
             iqr = q3 - q1
+
             lower_bound = q1 - (1.5 * iqr)
             upper_bound = q3 + (1.5 * iqr)
 
-            # Filter rows outside the bounds
-            outlier_mask = (self.df[col] < lower_bound) | (self.df[col] > upper_bound)
-            outlier_rows = self.df[outlier_mask]
+            outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
 
-            if not outlier_rows.empty:
-                id_col = "transaction_id" if "transaction_id" in self.df.columns else self.df.columns[0]
-                outliers[col] = [
-                    {
-                        "id": str(row[id_col]),
-                        "value": float(row[col]),
-                        "lower_bound": round(float(lower_bound), 2),
-                        "upper_bound": round(float(upper_bound), 2),
-                    }
-                    for _, row in outlier_rows.iterrows()
+            if not outliers.empty:
+                sample_values = [
+                    round(float(v), 2) for v in outliers[col].head(5).tolist()
                 ]
+                outlier_summary[col] = {
+                    "count": len(outliers),
+                    "lower_bound": round(lower_bound, 2),
+                    "upper_bound": round(upper_bound, 2),
+                    "sample_outlier_values": sample_values,
+                }
 
-        return outliers
+        return outlier_summary
 
+    # RENAMED to match what cli.py is calling
     def get_summary_statistics(self) -> dict[str, Any]:
-        """Generates a structured dictionary of statistics for LLM consumption."""
-        if self.df.empty:
-            self.load_and_clean()
+        """
+        Ingests dataset, cleans nulls, computes distributions, and generates
+        a statistical summary payload for the LLM.
+        """
+        df = self.load_data()
 
-        total_rows = len(self.df)
-        numeric_cols = self.df.select_dtypes(include=["number"]).columns.tolist()
+        total_rows, total_cols = df.shape
 
-        stats: dict[str, Any] = {
-            "total_records": total_rows,
-            "columns": list(self.df.columns),
-            "numeric_summaries": {},
-            "categorical_breakdowns": {},
-            "detected_outliers": self.detect_outliers(),
-        }
+        numeric_cols = [str(c) for c in df.select_dtypes(include=["number"]).columns]
+        categorical_cols = [
+            str(c) for c in df.select_dtypes(include=["object", "category"]).columns
+        ]
 
+        numeric_stats: dict[str, Any] = {}
         for col in numeric_cols:
-            stats["numeric_summaries"][col] = {
-                "mean": round(float(self.df[col].mean()), 2),
-                "std": round(float(self.df[col].std()), 2),
-                "min": round(float(self.df[col].min()), 2),
-                "max": round(float(self.df[col].max()), 2),
-                "sum": round(float(self.df[col].sum()), 2),
+            s = df[col].dropna()
+            if s.empty:
+                continue
+
+            mean_val = float(cast(float, s.mean()))
+            std_val = float(cast(float, s.std())) if len(s) > 1 else 0.0
+            min_val = float(cast(float, s.min()))
+            median_val = float(cast(float, s.median()))
+            max_val = float(cast(float, s.max()))
+
+            numeric_stats[col] = {
+                "mean": round(mean_val, 2),
+                "std": round(std_val, 2),
+                "min": round(min_val, 2),
+                "median": round(median_val, 2),
+                "max": round(max_val, 2),
+                "null_count": int(df[col].isnull().sum()),
             }
 
-        categorical_cols = self.df.select_dtypes(include=["object"]).columns
+        categorical_stats: dict[str, Any] = {}
         for col in categorical_cols:
-            if col not in ["transaction_id", "date"]:
-                stats["categorical_breakdowns"][col] = (
-                    self.df[col].value_counts().to_dict()
-                )
+            top_counts = df[col].value_counts().head(3).to_dict()
+            categorical_stats[col] = {
+                "unique_values": int(df[col].nunique()),
+                "top_frequencies": {str(k): int(v) for k, v in top_counts.items()},
+                "null_count": int(df[col].isnull().sum()),
+            }
 
-        return stats
+        outliers = self.calculate_iqr_outliers(df, numeric_cols)
+
+        return {
+            "dataset_metadata": {
+                "file_name": self.file_path.name,
+                "total_rows": total_rows,
+                "total_columns": total_cols,
+            },
+            "numeric_statistics": numeric_stats,
+            "categorical_statistics": categorical_stats,
+            "detected_outliers": outliers,
+        }

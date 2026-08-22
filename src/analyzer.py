@@ -1,19 +1,37 @@
+"""
+src/analyzer.py
+Connects to the Gemini API and enforces Pydantic structured output.
+"""
+
 import os
+import logging
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
+
+# Silence the Google GenAI SDK logging warnings
+logging.getLogger("google").setLevel(logging.ERROR)
+logging.getLogger("google.genai").setLevel(logging.ERROR)
 
 
 # 1. Define Pydantic models for structured LLM output
 class KeyInsight(BaseModel):
     title: str = Field(description="Short, punchy headline for the insight")
-    observation: str = Field(description="Factual data observation based on provided statistics")
-    business_impact: str = Field(description="Why this insight matters for the business")
+    observation: str = Field(
+        description="Factual data observation based on provided statistics"
+    )
+    business_impact: str = Field(
+        description="Why this insight matters for the business"
+    )
 
 
 class DataAnomaly(BaseModel):
-    metric: str = Field(description="Name of the metric or column where anomaly occurred")
-    finding: str = Field(description="Description of the outlier, gap, or unexpected value")
+    metric: str = Field(
+        description="Name of the metric or column where anomaly occurred"
+    )
+    finding: str = Field(
+        description="Description of the outlier, gap, or unexpected value"
+    )
     risk_level: str = Field(description="Risk assessment: High, Medium, or Low")
 
 
@@ -39,7 +57,9 @@ class DataAnalyzer:
     def __init__(self):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY is missing from environment variables.")
+            raise ValueError(
+                "GEMINI_API_KEY is missing from environment variables."
+            )
         self.client = genai.Client(api_key=api_key)
 
     def analyze(self, stats: dict) -> ExecutiveReport:
@@ -62,6 +82,12 @@ class DataAnalyzer:
                 temperature=0.2,
             ),
         )
+
+        # Type Guard: Ensure response.text exists before passing to Pydantic
+        if not response.text:
+            raise ValueError(
+                "Gemini API returned an empty response or was blocked by safety filters."
+            )
 
         # Parse and validate returned JSON into Pydantic model
         return ExecutiveReport.model_validate_json(response.text)
